@@ -1,115 +1,155 @@
 # 发布指南
 
-DSH Harness 的发布流程：构建签名 APK → 生成版本清单 → 部署发布页 → App 检查更新。
+DSH Harness 的发布流程：推 tag → GitHub Actions 自动构建 → 自动创建 Release → App 检查更新。
 
-## 一键发布
-
-```bash
-# 用 pubspec.yaml 里的版本号
-bash scripts/release.sh
-
-# 指定版本号、构建号和更新日志
-bash scripts/release.sh 1.1.0 2 "新增扫码入口" "修复中文界面"
-```
-
-脚本会依次完成：
-
-1. `flutter build apk --release`（已开启 R8 混淆 + 资源压缩）
-2. 把 APK 复制到 `release/DSH Harness.apk`
-3. 计算 sha256 与文件大小
-4. 生成 `release/version.json`
-5. 校验 JSON 格式
-
-产物：
-
-```
-release/
-├── index.html          # 发布页
-├── version.json        # 版本清单（App 检查更新用）
-└── DSH Harness.apk     # 安装包
-```
-
-## 部署
-
-`release/` 是纯静态目录，把整个目录部署到任意静态服务器即可：
+## 一、发布只需打一个 tag
 
 ```bash
-# 举例：nginx
-cp -r release/* /var/www/dsh-harness/
+# 1. 改版本号（pubspec.yaml）
+#    version: 1.1.0+2
 
-# 或用任何静态托管（GitHub Pages / 对象存储 / nginx）
+# 2. 提交并推送
+git add -A && git commit -m "release: v1.1.0"
+git push origin main
+
+# 3. 打 tag 触发自动发布
+git tag -a v1.1.0 -m "DSH Harness v1.1.0"
+git push origin v1.1.0
 ```
 
-部署后需要能访问到：
+推完 tag 后，GitHub Actions 会自动：
 
-- `https://<你的域名>/index.html` —— 发布页
-- `https://<你的域名>/version.json` —— 版本清单
-- `https://<你的域名>/DSH%20Harness.apk` —— 安装包
+1. 安装 JDK 17 + Flutter 3.47.8
+2. 拉依赖、跑静态检查、跑单元测试
+3. 用 release keystore 签名构建 APK（开启 R8 混淆 + 资源压缩）
+4. 上传 APK 到 Artifacts
+5. 创建 GitHub Release，把 APK 作为资产挂上去
+6. 生成 `version.json` 一并放进 Artifacts
 
-## 配置 App 的检查更新地址
+构建完成的 Release 地址：
 
-版本清单地址通过 `--dart-define` 在打包时指定：
-
-```bash
-flutter build apk --release \
-  --dart-define=UPDATE_MANIFEST_URL=https://<你的域名>/version.json
+```
+https://github.com/kirning/dsh-remote-android/releases/latest
 ```
 
-不指定时使用代码里的默认值（`lib/services/update_service.dart` 的 `defaultManifestUrl`）。
+## 二、更新日志
 
-> **注意**：`version.json` 里的 `downloadUrl` 建议用**相对路径**（如 `DSH Harness.apk`），
-> 这样把目录部署到任何域名下都能正常工作，不用改清单内容。
+Action 优先读 `.github/RELEASE_NOTES.md` 作为更新日志，没有则用本次构建的提交信息。
 
-## 签名
+```markdown
+# .github/RELEASE_NOTES.md
+- 新增扫码入口
+- 修复中文界面
+- 支持检查更新
+```
 
-发布版使用 `android/dsh-harness-release.jks` 签名，配置在 `android/key.properties`。
+## 三、签名配置（重要）
 
-- `key.properties` 与 `*.jks` 已加入 `.gitignore`，不要提交到版本库
-- **换密钥会导致已安装的 App 无法覆盖升级**，务必妥善备份
-- 缺少 `key.properties` 时会自动回退到 debug 签名，方便本地出包自测
+Release 用 `android/dsh-harness-release.jks` 签名，密钥以 **Secret** 形式存在仓库里。
+
+需要在仓库 **Settings → Secrets and variables → Actions** 添加 4 个 Repository secret：
+
+| Secret 名称 | 内容 | 如何生成 |
+| --- | --- | --- |
+| `ANDROID_KEYSTORE_BASE64` | keystore 文件的 base64 编码 | `base64 -w 0 android/dsh-harness-release.jks` |
+| `ANDROID_KEYSTORE_PASSWORD` | keystore 密码 | 生成密钥时设定 |
+| `ANDROID_KEY_ALIAS` | 密钥别名 | 生成密钥时设定 |
+| `ANDROID_KEY_PASSWORD` | 密钥密码 | 生成密钥时设定 |
+
+本地对应 `android/key.properties`（已 gitignore）：
+
+```properties
+storeFile=dsh-harness-release.jks
+storePassword=dshharness
+keyAlias=dsh-harness
+keyPassword=dshharness
+```
+
+> **没有配置 Secret 时，CI 会用 debug 签名构建**（会打印警告）。
+> 这样能保证流水线始终跑通，但产出的 APK 无法覆盖升级正式版。
+
+> **换密钥会导致已安装的 App 无法覆盖升级**，务必妥善备份 `.jks` 文件。
 
 当前密钥信息：
 
 | 项 | 值 |
 | --- | --- |
-| keystore | `android/dsh-harness-release.jks` |
 | alias | `dsh-harness` |
 | store/key password | `dshharness` |
 | 证书 CN | `CN=DSH Harness, OU=DSH, O=DSH, L=Shenzhen, ST=Guangdong, C=CN` |
 | 证书 SHA-256 | `3bdb751e56511a6e385832611e0edb84165c7f386ca3e2b63a6827e4a672eace` |
 
-## 版本号规则
+## 四、App 端检查更新
 
-- `version`（语义化版本，如 `1.1.0`）：展示给用户看
-- `versionCode`（递增整数）：App 用它严格判断新旧
+App 的「关于与更新」页面会请求：
 
-**每次发布必须递增 `versionCode`**，否则用户收不到更新提示。
-
-在 `pubspec.yaml` 里改：
-
-```yaml
-version: 1.1.0+2
+```
+GET https://api.github.com/repos/kirning/dsh-remote-android/releases/latest
 ```
 
-或者在发布脚本里直接传参覆盖。
+从返回的 Release 里解析：
 
-## 发布页与 App 的联动
+- **版本号** —— 取 `tag_name`（去掉 `v` 前缀）
+- **构建号** —— 从 body 里的 `<!-- versionCode=123 -->` 标记读取
+- **更新日志** —— 从 body 里的 `<!-- notes --> ... <!-- /notes -->` 区块读取
+- **下载地址** —— assets 里 `.apk` 结尾的那一个
 
-发布页的 `index.html` 会 `fetch('version.json')`，自动填充版本号、大小、
-更新日志和 sha256。App 的「关于与更新」页面请求的是同一个 `version.json`。
+若 GitHub 不可达，会回退到静态 `version.json`（自建服务器方案），地址用
+`--dart-define=UPDATE_MANIFEST_URL=...` 指定。
 
-也就是说 —— **发布页和 App 共用同一份数据源**，改一次清单两边都生效。
+### 本地出包时指定仓库
 
-## 排查
+```bash
+flutter build apk --release \
+  --dart-define=UPDATE_REPO=kirning/dsh-remote-android
+```
 
-**App 检查更新提示「服务器返回 404」**
-清单地址不对，或文件没部署上去。用浏览器直接访问 `version.json` 确认。
+不指定时默认就是 `kirning/dsh-remote-android`。
 
-**App 检查更新提示「当前已是最新版本」但实际有新版本**
-`versionCode` 没递增。检查 `version.json` 里的 `versionCode` 是否大于已安装版本。
+## 五、发布页
+
+`release/index.html` 是产品发布页，同样从 GitHub Releases API 取数据，
+所以**发布页和 App 看到的数据永远一致**。
+
+部署方式：把 `release/` 目录传到任意静态服务器，或用 GitHub Pages。
+
+## 六、版本号规则
+
+| 字段 | 用途 | 谁来定 |
+| --- | --- | --- |
+| `version` | 展示给用户的版本号 | tag 名（`v1.1.0` → `1.1.0`） |
+| `versionCode` | 严格比较新旧 | CI 自动生成：`run_number * 100 + pubspec 里的号` |
+
+**构建号每次发布都会严格递增**，用户一定能收到更新提示。
+
+## 七、排查
+
+**Action 在「创建 GitHub Release」这一步失败**
+看 run 的日志。当前实现直接调 REST API，失败时会打印响应体（含具体错误）。
+
+**App 提示「该仓库还没有发布过 Release」**
+仓库里确实还没发过 Release。打 tag 触发一次即可。
+
+**App 提示「当前已是最新版本」但实际有新版本**
+构建号没递增。检查 Release body 里的 `<!-- versionCode=... -->` 是否存在。
 
 **下载后无法安装，提示「应用未安装」**
-签名不一致 —— 新 APK 用了不同的密钥。检查 `apksigner verify --print-certs` 的输出。
+签名不一致。CI 用的 Secret 里配的 keystore 和本地不是同一个。
+用 `apksigner verify --print-certs` 比对证书 SHA-256。
 
-**安装时提示「不允许安装未知来源应用」**
-在系统设置里为浏览器/文件管理器开启安装权限。
+**改了 workflow 后整个 job 都不显示**
+YAML 语法错误。可以用 Python 的 yaml 模块本地校验：
+
+```bash
+python -c "import yaml; yaml.safe_load(open('.github/workflows/release.yml'))"
+```
+
+## 八、本地发布脚本（不走 CI）
+
+想在本机出包并生成静态发布页时用：
+
+```bash
+bash scripts/release.sh 1.1.0 2 "新增扫码入口" "修复中文界面"
+```
+
+产物在 `release/` 目录，把整个目录传到静态服务器即可。

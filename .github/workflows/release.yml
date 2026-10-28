@@ -146,36 +146,11 @@ jobs:
             echo "published_at=$PUBLISHED"
           } >> "$GITHUB_OUTPUT"
 
-          # 生成 version.json（供自建服务器的静态清单方案使用）
+          # 生成 version.json（供自建服务器的静态清单方案使用）。
+          # 注意：sha/size 等要在这里用 shell 变量直接传给 Python，
+          # 不能依赖本 step 自己的 outputs（step 无法引用自己的 outputs）。
           REL_SIZE="$SIZE" REL_SHA="$SHA" REL_PUBLISHED="$PUBLISHED" \
             python3 - <<'PY'
-          import json, os
-          version = os.environ['REL_VERSION']
-          version_code = int(os.environ['REL_VERSION_CODE'])
-          sha = os.environ['REL_SHA']
-          published = os.environ['REL_PUBLISHED']
-          size = int(os.environ['REL_SIZE'])
-          repo = os.environ['REL_REPO']
-
-          notes = [l.lstrip('- ').strip()
-                   for l in open('dist/notes.txt', encoding='utf-8') if l.strip()]
-
-          data = {
-              "version": version,
-              "versionCode": version_code,
-              "downloadUrl": f"https://github.com/{repo}/releases/latest/download/dsh-harness.apk",
-              "sha256": sha,
-              "sizeBytes": size,
-              "publishedAt": published,
-              "minAndroidVersion": "7.0",
-              "notes": notes,
-          }
-          json.dump(data, open('dist/version.json', 'w', encoding='utf-8'),
-                    ensure_ascii=False, indent=2)
-          PY
-
-          # 生成 version.json（供自建服务器的静态清单方案使用）
-          python3 - <<'PY'
           import json, os
           version = os.environ['REL_VERSION']
           version_code = int(os.environ['REL_VERSION_CODE'])
@@ -221,11 +196,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REL_TAG: v${{ steps.version.outputs.version }}
-          REL_VERSION: ${{ steps.version.outputs.version }}
-          REL_VERSION_CODE: ${{ steps.version.outputs.version_code }}
-          REL_SIZE: ${{ steps.artifact.outputs.size }}
-          REL_SHA: ${{ steps.artifact.outputs.sha256 }}
-          REL_PUBLISHED: ${{ steps.artifact.outputs.published_at }}
           REL_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
@@ -234,20 +204,20 @@ jobs:
           # 结构化元信息放在 HTML 注释里，供 App 解析版本号与更新日志，
           # 同时不影响正文的可读性。
           #
+          # 直接复用上一步生成的 version.json，保证 Release 与清单数据一致。
+          #
           # 注意：Python 脚本必须用 YAML 块标量（|）包裹，
           # 否则其中的 '- 开头的行会被 YAML 当成列表项解析而报错。
           python3 - <<'PY'
           import json, os
-          # 变量一律从环境变量读取，避免 shell 与 Python 的变量语法混用。
-          version = os.environ['REL_VERSION']
-          version_code = os.environ['REL_VERSION_CODE']
-          size = int(os.environ['REL_SIZE'])
-          sha = os.environ['REL_SHA']
-          published = os.environ['REL_PUBLISHED']
+          manifest = json.load(open('dist/version.json', encoding='utf-8'))
+          version = manifest['version']
+          version_code = manifest['versionCode']
+          size = manifest['sizeBytes']
+          sha = manifest['sha256']
+          published = manifest['publishedAt']
           tag = os.environ['REL_TAG']
-
-          notes = [l.lstrip('- ').strip()
-                   for l in open('dist/notes.txt', encoding='utf-8') if l.strip()]
+          notes = manifest.get('notes', [])
 
           # 用列表逐行拼装，避免多行字符串破坏 YAML 块标量的缩进。
           lines = [
