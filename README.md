@@ -38,6 +38,15 @@ git push origin v1.1.0
 GitHub Actions 会自动：装 JDK/Flutter → 跑测试 → 构建签名 APK → 创建 Release 并上传 APK。
 App 的「关于与更新」页面从 GitHub Releases 读取新版本，发布页 `release/index.html` 也用同一个数据源。
 
+已发布的版本：
+
+| 版本 | 下载 | 说明 |
+| --- | --- | --- |
+| v1.0.0 | [dsh-harness.apk](https://github.com/kirning/dsh-remote-android/releases/latest/download/dsh-harness.apk) | 首个正式版，正式签名，可覆盖升级 |
+
+> CI 用仓库 Secrets 里的密钥签名（`ANDROID_KEYSTORE_BASE64` 等 4 个），
+> 已在 Release 上验证过覆盖升级：v0.9.0 → v1.0.0 安装返回 Success。
+
 详细说明见 [`docs/RELEASE.md`](docs/RELEASE.md)。
 
 ### 详情页还提供

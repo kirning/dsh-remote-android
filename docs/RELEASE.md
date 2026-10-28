@@ -65,7 +65,36 @@ gh run view <run-id> --repo kirning/dsh-remote-android --log-failed
 gh release view v1.0.0 --repo kirning/dsh-remote-android
 ```
 
-## 四、签名配置（重要）
+## 四、GitHub Secrets 配置
+
+CI 需要 4 个 Secret 才能产出**正式签名**的 APK（否则自动回退 debug 签名，
+用户能装但**无法覆盖升级**）：
+
+| Secret | 值 | 来源 |
+| --- | --- | --- |
+| `ANDROID_KEYSTORE_BASE64` | base64 编码的 jks | `base64 -w 0 android/dsh-harness-release.jks` |
+| `ANDROID_KEYSTORE_PASSWORD` | `dshharness` | `key.properties` 的 storePassword |
+| `ANDROID_KEY_ALIAS` | `dsh-harness` | `key.properties` 的 keyAlias |
+| `ANDROID_KEY_PASSWORD` | `dshharness` | `key.properties` 的 keyPassword |
+
+用 gh CLI 一次性写入：
+
+```bash
+gh secret set ANDROID_KEYSTORE_BASE64 --repo <repo> --body "$(base64 -w 0 android/dsh-harness-release.jks)"
+gh secret set ANDROID_KEYSTORE_PASSWORD --repo <repo> --body "$(grep storePassword android/key.properties | cut -d= -f2)"
+gh secret set ANDROID_KEY_ALIAS      --repo <repo> --body "$(grep keyAlias      android/key.properties | cut -d= -f2)"
+gh secret set ANDROID_KEY_PASSWORD   --repo <repo> --body "$(grep keyPassword   android/key.properties | cut -d= -f2)"
+```
+
+验证签名是否真的生效：
+
+```bash
+gh release download v1.0.0 --repo <repo> --pattern "dsh-harness.apk"
+apksigner verify --print-certs dsh-harness.apk
+# 证书指纹应与本地 release 包一致
+```
+
+## 五、签名配置（重要）
 
 Release 用 `android/dsh-harness-release.jks` 签名，密钥以 **Secret** 形式存在仓库里。
 
@@ -101,7 +130,7 @@ keyPassword=dshharness
 | 证书 CN | `CN=DSH Harness, OU=DSH, O=DSH, L=Shenzhen, ST=Guangdong, C=CN` |
 | 证书 SHA-256 | `3bdb751e56511a6e385832611e0edb84165c7f386ca3e2b63a6827e4a672eace` |
 
-## 五、App 端检查更新
+## 六、App 端检查更新
 
 App 的「关于与更新」页面会请求：
 
@@ -128,14 +157,14 @@ flutter build apk --release \
 
 不指定时默认就是 `kirning/dsh-remote-android`。
 
-## 六、发布页
+## 七、发布页
 
 `release/index.html` 是产品发布页，同样从 GitHub Releases API 取数据，
 所以**发布页和 App 看到的数据永远一致**。
 
 部署方式：把 `release/` 目录传到任意静态服务器，或用 GitHub Pages。
 
-## 七、版本号规则
+## 八、版本号规则
 
 | 字段 | 用途 | 谁来定 |
 | --- | --- | --- |
@@ -144,7 +173,7 @@ flutter build apk --release \
 
 **构建号每次发布都会严格递增**，用户一定能收到更新提示。
 
-## 八、排查
+## 九、排查
 
 **Action 在「创建 GitHub Release」这一步失败**
 看 run 的日志。当前实现直接调 REST API，失败时会打印响应体（含具体错误）。
@@ -166,7 +195,7 @@ YAML 语法错误。可以用 Python 的 yaml 模块本地校验：
 python -c "import yaml; yaml.safe_load(open('.github/workflows/release.yml'))"
 ```
 
-## 九、本地发布脚本（不走 CI）
+## 十、本地发布脚本（不走 CI）
 
 想在本机出包并生成静态发布页时用：
 
