@@ -200,6 +200,14 @@ jobs:
         run: |
           set -euo pipefail
 
+          # gh CLI 预装在 GitHub runner 上；这里显式确认并用 token 登录。
+          if ! command -v gh >/dev/null 2>&1; then
+            echo "::error::runner 上没有 gh CLI"
+            exit 1
+          fi
+          gh --version
+          echo "$GH_TOKEN" | gh auth login --hostname github.com --with-token
+
           # ---- 组装 Release body ----
           # 结构化元信息放在 HTML 注释里，供 App 解析版本号与更新日志，
           # 同时不影响正文的可读性。
@@ -306,11 +314,12 @@ jobs:
           echo "Release id=$RELEASE_ID"
 
           # ---- 上传 APK 资产 ----
-          # GitHub 的资产上传接口要求 multipart/form-data，
-          # 直接发二进制会返回 400 "Multipart form data required"。
+          # 用 gh CLI 上传：它内部对 multipart 与大文件分块的处理是正确的，
+          # 手写 curl -F 容易踩到 "Bad Size"(422) 与
+          # "Multipart form data required"(400) 这两个坑。
           echo "--- 上传 APK 资产 ---"
 
-          # 若同名资产已存在，先删掉再传，保证重跑能覆盖。
+          # 上传前先删掉同名旧资产，保证重跑能覆盖。
           ASSET_ID=$(python3 - <<'PYEOF'
           import json, os, urllib.request
           url = os.environ['UPLOAD_URL'].split('{')[0]
@@ -339,19 +348,7 @@ jobs:
               "https://api.github.com/repos/${REL_REPO}/releases/assets/$ASSET_ID"
           fi
 
-          HTTP_CODE=$(curl -sS -w '%{http_code}' -o upload_resp.json \
-            -X POST \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            -F "file=@dist/dsh-harness.apk;filename=dsh-harness.apk;type=application/vnd.android.package-archive" \
-            "${UPLOAD_URL}?name=dsh-harness.apk")
-
-          if [ "$HTTP_CODE" != "201" ]; then
-            echo "::error::上传 APK 失败（HTTP $HTTP_CODE）"
-            cat upload_resp.json
-            exit 1
-          fi
-
+          gh release upload "${REL_TAG}" dist/dsh-harness.apk#dsh-harness.apk \
+            --repo "${REL_REPO}" --clobber
           echo "APK 上传完成"
           echo "Release 已发布：https://github.com/${REL_REPO}/releases/tag/${REL_TAG}"
