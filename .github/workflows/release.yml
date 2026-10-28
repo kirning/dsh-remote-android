@@ -196,17 +196,20 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REL_TAG: v${{ steps.version.outputs.version }}
+          REL_VERSION: ${{ steps.version.outputs.version }}
           REL_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
 
-          # gh CLI 预装在 GitHub runner 上；这里显式确认并用 token 登录。
+          # gh CLI 预装在 GitHub runner 上（ubuntu-24.04 自带 2.102.0）。
+          # 认证直接用 GH_TOKEN 环境变量，不需要再执行 gh auth login。
           if ! command -v gh >/dev/null 2>&1; then
             echo "::error::runner 上没有 gh CLI"
             exit 1
           fi
           gh --version
-          echo "$GH_TOKEN" | gh auth login --hostname github.com --with-token
+          export GH_TOKEN
+          export GH_HOST=github.com
 
           # ---- 组装 Release body ----
           # 结构化元信息放在 HTML 注释里，供 App 解析版本号与更新日志，
@@ -224,7 +227,6 @@ jobs:
           size = manifest['sizeBytes']
           sha = manifest['sha256']
           published = manifest['publishedAt']
-          tag = os.environ['REL_TAG']
           notes = manifest.get('notes', [])
 
           # 用列表逐行拼装，避免多行字符串破坏 YAML 块标量的缩进。
@@ -255,100 +257,29 @@ jobs:
           lines += ['<!-- /notes -->', '']
           body = '\n'.join(lines)
 
-          json.dump({
-              'tag_name': tag,
-              'name': f'DSH Harness v{version}',
-              'body': body,
-              'draft': False,
-              'prerelease': False,
-          }, open('release.json', 'w', encoding='utf-8'), ensure_ascii=False)
+          open('release_notes.md', 'w', encoding='utf-8').write(body)
+          print(body)
           PY
 
-          # 顺便把同样的内容写进 job summary，方便在 Actions 页面直接看。
-          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
-          import json
-          print(json.load(open('release.json', encoding='utf-8'))['body'])
-          PY
-
-          # ---- 创建 Release（已存在则复用，保证重跑幂等）----
+          # ---- 创建 Release ----
+          # 已存在同 tag 的 Release 时改为更新，保证重跑幂等。
           echo "--- 创建 Release ---"
-          HTTP_CODE=$(curl -sS -w '%{http_code}' -o release_resp.json \
-            -X POST \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            -H "Content-Type: application/json" \
-            "https://api.github.com/repos/${REL_REPO}/releases" \
-            --data @release.json)
-
-          if [ "$HTTP_CODE" = "201" ]; then
-            echo "Release 已创建"
-          elif [ "$HTTP_CODE" = "422" ]; then
-            # 该 tag 的 Release 已存在（重跑场景），改用 PATCH 更新。
+          if gh release view "${REL_TAG}" --repo "${REL_REPO}" >/dev/null 2>&1; then
             echo "Release 已存在，改为更新"
-            EXISTING_ID=$(curl -sS --max-time 30 \
-              -H "Authorization: Bearer $GH_TOKEN" \
-              -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/${REL_REPO}/releases/tags/${REL_TAG}" \
-              | python3 -c "import json,sys;print(json.load(sys.stdin)['id'])")
-            curl -sS -o /dev/null -X PATCH \
-              -H "Authorization: Bearer $GH_TOKEN" \
-              -H "Accept: application/vnd.github+json" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              -H "Content-Type: application/json" \
-              "https://api.github.com/repos/${REL_REPO}/releases/$EXISTING_ID" \
-              --data @release.json
-            release_resp.json=$(curl -sS --max-time 30 \
-              -H "Authorization: Bearer $GH_TOKEN" \
-              -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/${REL_REPO}/releases/tags/${REL_TAG}")
+            gh release edit "${REL_TAG}" --repo "${REL_REPO}" \
+              --title "DSH Harness v${REL_VERSION}" \
+              --notes-file release_notes.md
           else
-            echo "::error::创建 Release 失败（HTTP $HTTP_CODE）"
-            cat release_resp.json
-            exit 1
+            gh release create "${REL_TAG}" \
+              --repo "${REL_REPO}" \
+              --title "DSH Harness v${REL_VERSION}" \
+              --notes-file release_notes.md \
+              --target "${GITHUB_SHA}" \
+              dist/dsh-harness.apk#dsh-harness.apk
           fi
 
-          RELEASE_ID=$(python3 -c "import json;print(json.load(open('release_resp.json'))['id'])")
-          UPLOAD_URL=$(python3 -c "import json;print(json.load(open('release_resp.json'))['upload_url'])")
-          export UPLOAD_URL
-          echo "Release id=$RELEASE_ID"
+          echo "--- 确认资产已挂上 ---"
+          gh release view "${REL_TAG}" --repo "${REL_REPO}" \
+            --json assets --jq '.assets[] | "\(.name) \(.size) bytes"'
 
-          # ---- 上传 APK 资产 ----
-          # 用 gh CLI 上传：它内部对 multipart 与大文件分块的处理是正确的，
-          # 手写 curl -F 容易踩到 "Bad Size"(422) 与
-          # "Multipart form data required"(400) 这两个坑。
-          echo "--- 上传 APK 资产 ---"
-
-          # 上传前先删掉同名旧资产，保证重跑能覆盖。
-          ASSET_ID=$(python3 - <<'PYEOF'
-          import json, os, urllib.request
-          url = os.environ['UPLOAD_URL'].split('{')[0]
-          req = urllib.request.Request(
-              url + '?per_page=100',
-              headers={
-                  'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
-                  'Accept': 'application/vnd.github+json',
-                  'X-GitHub-Api-Version': '2022-11-28',
-              })
-          try:
-              data = json.load(urllib.request.urlopen(req))
-          except Exception:
-              data = []
-          for a in data:
-              if a.get('name') == 'dsh-harness.apk':
-                  print(a['id'])
-                  break
-          PYEOF
-          )
-          if [ -n "$ASSET_ID" ]; then
-            echo "删除已存在的资产 id=$ASSET_ID"
-            curl -sS -o /dev/null -X DELETE \
-              -H "Authorization: Bearer $GH_TOKEN" \
-              -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/${REL_REPO}/releases/assets/$ASSET_ID"
-          fi
-
-          gh release upload "${REL_TAG}" dist/dsh-harness.apk#dsh-harness.apk \
-            --repo "${REL_REPO}" --clobber
-          echo "APK 上传完成"
           echo "Release 已发布：https://github.com/${REL_REPO}/releases/tag/${REL_TAG}"
