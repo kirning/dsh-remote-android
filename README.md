@@ -25,22 +25,18 @@
 
 ## 发布与更新
 
-发布页在 `release/` 目录（纯静态），App 的「检查更新」读同一份 `version.json`，
-**两边共用一个数据源**。
+代码托管在 **https://github.com/kirning/dsh-remote-android** ，推 tag 即自动构建并发布。
 
 ```bash
-# 一键发布：构建签名 APK + 生成 version.json
-bash scripts/release.sh 1.1.0 2 "新增扫码入口" "修复中文界面"
+# 打 tag 触发自动发布
+git tag -a v1.1.0 -m "DSH Harness v1.1.0"
+git push origin v1.1.0
 
-# 部署 release/ 到任意静态服务器即可
+# 或手动触发（Actions → Release → Run workflow）
 ```
 
-打包时可用 `--dart-define` 指定清单地址：
-
-```bash
-flutter build apk --release \
-  --dart-define=UPDATE_MANIFEST_URL=https://<你的域名>/version.json
-```
+GitHub Actions 会自动：装 JDK/Flutter → 跑测试 → 构建签名 APK → 创建 Release 并上传 APK。
+App 的「关于与更新」页面从 GitHub Releases 读取新版本，发布页 `release/index.html` 也用同一个数据源。
 
 详细说明见 [`docs/RELEASE.md`](docs/RELEASE.md)。
 

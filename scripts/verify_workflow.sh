@@ -4,7 +4,7 @@
 #   2. 关键引用是否存在
 #   3. 整理产物 + Release body 的逻辑能否跑通
 set -euo pipefail
-ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WF="$ROOT/.github/workflows/release.yml"
 
 PY=/c/Users/aa/AppData/Local/Python/pythoncore-3.14-64/python.exe

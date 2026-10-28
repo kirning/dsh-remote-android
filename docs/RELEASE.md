@@ -43,7 +43,29 @@ Action 优先读 `.github/RELEASE_NOTES.md` 作为更新日志，没有则用本
 - 支持检查更新
 ```
 
-## 三、签名配置（重要）
+## 三、CI 用到的 gh CLI
+
+发布流程用 **gh CLI** 完成 Release 的创建与资产上传：
+
+```bash
+gh release create "$TAG" --repo "$REPO" --title "..." --notes-file release_notes.md \
+  --target "$SHA" dist/dsh-harness.apk#dsh-harness.apk
+```
+
+- gh CLI 预装在 GitHub 的 ubuntu-24.04 runner 上（自带 2.102.0），无需额外安装
+- 认证直接用 `GH_TOKEN` 环境变量即可，**不需要** `gh auth login`
+- 手写 `curl -F` 或 Python `urllib` 上传资产都会被 GitHub 判为 `422 "Bad Size"`，
+  必须用 gh 官方实现
+
+本地调试时同样可以用 gh：
+
+```bash
+gh run list --repo kirning/dsh-remote-android --limit 10
+gh run view <run-id> --repo kirning/dsh-remote-android --log-failed
+gh release view v1.0.0 --repo kirning/dsh-remote-android
+```
+
+## 四、签名配置（重要）
 
 Release 用 `android/dsh-harness-release.jks` 签名，密钥以 **Secret** 形式存在仓库里。
 
@@ -79,7 +101,7 @@ keyPassword=dshharness
 | 证书 CN | `CN=DSH Harness, OU=DSH, O=DSH, L=Shenzhen, ST=Guangdong, C=CN` |
 | 证书 SHA-256 | `3bdb751e56511a6e385832611e0edb84165c7f386ca3e2b63a6827e4a672eace` |
 
-## 四、App 端检查更新
+## 五、App 端检查更新
 
 App 的「关于与更新」页面会请求：
 
@@ -106,14 +128,14 @@ flutter build apk --release \
 
 不指定时默认就是 `kirning/dsh-remote-android`。
 
-## 五、发布页
+## 六、发布页
 
 `release/index.html` 是产品发布页，同样从 GitHub Releases API 取数据，
 所以**发布页和 App 看到的数据永远一致**。
 
 部署方式：把 `release/` 目录传到任意静态服务器，或用 GitHub Pages。
 
-## 六、版本号规则
+## 七、版本号规则
 
 | 字段 | 用途 | 谁来定 |
 | --- | --- | --- |
@@ -122,7 +144,7 @@ flutter build apk --release \
 
 **构建号每次发布都会严格递增**，用户一定能收到更新提示。
 
-## 七、排查
+## 八、排查
 
 **Action 在「创建 GitHub Release」这一步失败**
 看 run 的日志。当前实现直接调 REST API，失败时会打印响应体（含具体错误）。
@@ -144,7 +166,7 @@ YAML 语法错误。可以用 Python 的 yaml 模块本地校验：
 python -c "import yaml; yaml.safe_load(open('.github/workflows/release.yml'))"
 ```
 
-## 八、本地发布脚本（不走 CI）
+## 九、本地发布脚本（不走 CI）
 
 想在本机出包并生成静态发布页时用：
 
