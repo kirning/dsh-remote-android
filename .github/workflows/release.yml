@@ -262,8 +262,7 @@ jobs:
           print(json.load(open('release.json', encoding='utf-8'))['body'])
           PY
 
-          # ---- 用 curl 调 API 创建 Release ----
-          # 不依赖 gh CLI，行为更可预期。
+          # ---- 创建 Release（已存在则复用，保证重跑幂等）----
           echo "--- 创建 Release ---"
           HTTP_CODE=$(curl -sS -w '%{http_code}' -o release_resp.json \
             -X POST \
@@ -274,7 +273,28 @@ jobs:
             "https://api.github.com/repos/${REL_REPO}/releases" \
             --data @release.json)
 
-          if [ "$HTTP_CODE" != "201" ]; then
+          if [ "$HTTP_CODE" = "201" ]; then
+            echo "Release 已创建"
+          elif [ "$HTTP_CODE" = "422" ]; then
+            # 该 tag 的 Release 已存在（重跑场景），改用 PATCH 更新。
+            echo "Release 已存在，改为更新"
+            EXISTING_ID=$(curl -sS --max-time 30 \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${REL_REPO}/releases/tags/${REL_TAG}" \
+              | python3 -c "import json,sys;print(json.load(sys.stdin)['id'])")
+            curl -sS -o /dev/null -X PATCH \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              -H "Content-Type: application/json" \
+              "https://api.github.com/repos/${REL_REPO}/releases/$EXISTING_ID" \
+              --data @release.json
+            release_resp.json=$(curl -sS --max-time 30 \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${REL_REPO}/releases/tags/${REL_TAG}")
+          else
             echo "::error::创建 Release 失败（HTTP $HTTP_CODE）"
             cat release_resp.json
             exit 1
@@ -282,18 +302,50 @@ jobs:
 
           RELEASE_ID=$(python3 -c "import json;print(json.load(open('release_resp.json'))['id'])")
           UPLOAD_URL=$(python3 -c "import json;print(json.load(open('release_resp.json'))['upload_url'])")
-          echo "Release 已创建，id=$RELEASE_ID"
+          export UPLOAD_URL
+          echo "Release id=$RELEASE_ID"
 
           # ---- 上传 APK 资产 ----
+          # GitHub 的资产上传接口要求 multipart/form-data，
+          # 直接发二进制会返回 400 "Multipart form data required"。
           echo "--- 上传 APK 资产 ---"
+
+          # 若同名资产已存在，先删掉再传，保证重跑能覆盖。
+          ASSET_ID=$(python3 - <<'PYEOF'
+          import json, os, urllib.request
+          url = os.environ['UPLOAD_URL'].split('{')[0]
+          req = urllib.request.Request(
+              url + '?per_page=100',
+              headers={
+                  'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                  'Accept': 'application/vnd.github+json',
+                  'X-GitHub-Api-Version': '2022-11-28',
+              })
+          try:
+              data = json.load(urllib.request.urlopen(req))
+          except Exception:
+              data = []
+          for a in data:
+              if a.get('name') == 'dsh-harness.apk':
+                  print(a['id'])
+                  break
+          PYEOF
+          )
+          if [ -n "$ASSET_ID" ]; then
+            echo "删除已存在的资产 id=$ASSET_ID"
+            curl -sS -o /dev/null -X DELETE \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${REL_REPO}/releases/assets/$ASSET_ID"
+          fi
+
           HTTP_CODE=$(curl -sS -w '%{http_code}' -o upload_resp.json \
             -X POST \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
-            -H "Content-Type: application/octet-stream" \
-            "${UPLOAD_URL}?name=dsh-harness.apk" \
-            --data-binary @dist/dsh-harness.apk)
+            -F "file=@dist/dsh-harness.apk;filename=dsh-harness.apk;type=application/vnd.android.package-archive" \
+            "${UPLOAD_URL}?name=dsh-harness.apk")
 
           if [ "$HTTP_CODE" != "201" ]; then
             echo "::error::上传 APK 失败（HTTP $HTTP_CODE）"
