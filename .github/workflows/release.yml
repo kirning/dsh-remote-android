@@ -61,6 +61,7 @@ jobs:
           restore-keys: gradle-${{ runner.os }}-
 
       # 签名密钥来自仓库 Secrets，本地 key.properties 不入库。
+      # 未配置 secret 时会自动退回 debug 签名，保证 CI 仍能跑通。
       - name: 写入签名配置
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -70,7 +71,8 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "$KEYSTORE_BASE64" ]; then
-            echo "::error::未配置 ANDROID_KEYSTORE_BASE64 secret，将使用 debug 签名构建"
+            echo "::warning::未配置 ANDROID_KEYSTORE_BASE64，本次使用 debug 签名构建。"
+            echo "::warning::正式发布请在仓库 Settings → Secrets and variables → Actions 中添加。"
             exit 0
           fi
           echo "$KEYSTORE_BASE64" | base64 --decode > android/dsh-harness-release.jks
@@ -94,6 +96,7 @@ jobs:
             VERSION=$(grep -E '^version:' pubspec.yaml | sed -E 's/version:[[:space:]]*//; s/\+.*//')
           fi
           VERSION_CODE=$(grep -E '^version:' pubspec.yaml | sed -E 's/.*\+[[:space:]]*//')
+          # 构建号必须严格递增：run 号 * 100 + pubspec 里的基础号
           BUILD_NUMBER=$(( ${GITHUB_RUN_NUMBER} * 100 + ${VERSION_CODE} ))
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "version_code=$BUILD_NUMBER" >> "$GITHUB_OUTPUT"
@@ -126,19 +129,17 @@ jobs:
           SHA=$(sha256sum dist/dsh-harness.apk | cut -d' ' -f1)
           PUBLISHED=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-          # 更新日志：优先用 tag 的 release notes（.github/RELEASE_NOTES.md），
-          # 没有则用本次构建的提交信息。
+          # 更新日志：优先用 .github/RELEASE_NOTES.md，否则用本次构建的提交信息。
           if [ -f .github/RELEASE_NOTES.md ]; then
             cp .github/RELEASE_NOTES.md dist/notes.txt
           else
             git log --pretty=format:'- %s' -n 10 > dist/notes.txt
           fi
 
-          # 把元信息写进 version.json，同时作为 Release body 的注释区块，
-          # 供 App 从 GitHub Release 里解析出版本号与更新日志。
+          # 生成 version.json（供自建服务器的静态清单方案使用）
           python3 - <<PY
           import json
-          notes = [l.strip('- ').strip() for l in open('dist/notes.txt', encoding='utf-8') if l.strip()]
+          notes = [l.lstrip('- ').strip() for l in open('dist/notes.txt', encoding='utf-8') if l.strip()]
           data = {
             "version": "${{ steps.version.outputs.version }}",
             "versionCode": ${{ steps.version.outputs.version_code }},
@@ -178,9 +179,15 @@ jobs:
           SIZE: ${{ steps.artifact.outputs.size }}
           SHA: ${{ steps.artifact.outputs.sha256 }}
           PUBLISHED: ${{ steps.artifact.outputs.published_at }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          NOTES_BLOCK=$(sed 's/^/          /' dist/notes.txt)
+
+          # ---- 组装 Release body ----
+          # 结构化元信息放在 HTML 注释里，供 App 解析版本号与更新日志，
+          # 同时不影响正文的可读性。
+          NOTES_BLOCK=$(sed 's/^/> /' dist/notes.txt)
+
           {
             echo "## DSH Harness v${VERSION}"
             echo
@@ -192,48 +199,84 @@ jobs:
             echo
             echo "### 下载"
             echo
-            echo "\`dsh-harness.apk\`（sha256: \`${SHA}\`）"
+            echo "APK 文件名：\`dsh-harness.apk\`　sha256：\`${SHA}\`"
             echo
             echo "### 更新内容"
             echo
-            echo "<!-- notes -->"
             echo "${NOTES_BLOCK}"
-            echo "<!-- /notes -->"
-            echo
-            echo "<!-- versionCode=${VERSION_CODE} -->"
-            echo "<!-- minAndroidVersion=7.0 -->"
           } >> "$GITHUB_STEP_SUMMARY"
 
-          # 把结构化元信息写进 Release body，供 App 从 GitHub 解析出版本号与更新日志。
-          # 更新日志用 HTML 注释包裹，避免污染正文展示。
-          NOTES_BLOCK=$(sed 's/^/          /' dist/notes.txt)
-          BODY=$(cat <<EOF
-          ## DSH Harness v${VERSION}
+          python3 - <<PY
+          import json, os
+          notes = [l.lstrip('- ').strip() for l in open('dist/notes.txt', encoding='utf-8') if l.strip()]
+          body = f"""## DSH Harness v${VERSION}
 
-          - 版本号：${VERSION}
-          - 构建号：${VERSION_CODE}
-          - 文件大小：$(( SIZE / 1048576 )) MB
-          - 最低系统：Android 7.0 (API 24)
+- 版本号：${VERSION}
+- 构建号：${VERSION_CODE}
+- 文件大小：$(( SIZE / 1048576 )) MB
+- 最低系统：Android 7.0 (API 24)
 
-          ### 下载
+### 下载
 
-          \`dsh-harness.apk\` — sha256: \`${SHA}\`
+APK 文件名：\`dsh-harness.apk\`　sha256：\`${SHA}\`
 
-          ### 更新内容
+### 更新内容
 
-          <!-- notes -->
-          ${NOTES_BLOCK}
-          <!-- /notes -->
+{chr(10).join('- ' + n for n in notes)}
 
-          <!-- versionCode=${VERSION_CODE} -->
-          <!-- minAndroidVersion=7.0 -->
-          EOF
-          )
+<!-- versionCode=${VERSION_CODE} -->
+<!-- minAndroidVersion=7.0 -->
+<!-- notes -->
+{chr(10).join('- ' + n for n in notes)}
+<!-- /notes -->
+"""
+          json.dump({
+              "tag_name": "${TAG}",
+              "name": "DSH Harness v${VERSION}",
+              "body": body,
+              "draft": False,
+              "prerelease": False,
+          }, open('release.json', 'w', encoding='utf-8'), ensure_ascii=False)
+          PY
 
-          gh release create "$TAG" \
-            --title "DSH Harness v${VERSION}" \
-            --body "$BODY" \
-            dist/dsh-harness.apk#dsh-harness.apk \
-            || gh release upload "$TAG" dist/dsh-harness.apk#dsh-harness.apk --clobber
+          # ---- 用 curl 调 API 创建 Release ----
+          # 不依赖 gh CLI，行为更可预期。
+          echo "--- 创建 Release ---"
+          HTTP_CODE=$(curl -sS -w '%{http_code}' -o release_resp.json \
+            -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            -H "Content-Type: application/json" \
+            "https://api.github.com/repos/${REPO}/releases" \
+            --data @release.json)
 
-          echo "Release $TAG 已发布"
+          if [ "$HTTP_CODE" != "201" ]; then
+            echo "::error::创建 Release 失败（HTTP $HTTP_CODE）"
+            cat release_resp.json
+            exit 1
+          fi
+
+          RELEASE_ID=$(python3 -c "import json;print(json.load(open('release_resp.json'))['id'])")
+          UPLOAD_URL=$(python3 -c "import json;print(json.load(open('release_resp.json'))['upload_url'])")
+          echo "Release 已创建，id=$RELEASE_ID"
+
+          # ---- 上传 APK 资产 ----
+          echo "--- 上传 APK 资产 ---"
+          HTTP_CODE=$(curl -sS -w '%{http_code}' -o upload_resp.json \
+            -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            -H "Content-Type: application/octet-stream" \
+            "${UPLOAD_URL}?name=dsh-harness.apk" \
+            --data-binary @dist/dsh-harness.apk)
+
+          if [ "$HTTP_CODE" != "201" ]; then
+            echo "::error::上传 APK 失败（HTTP $HTTP_CODE）"
+            cat upload_resp.json
+            exit 1
+          fi
+
+          echo "APK 上传完成"
+          echo "Release 已发布：https://github.com/${REPO}/releases/tag/${TAG}"
