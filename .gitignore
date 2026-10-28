@@ -63,3 +63,6 @@ app.*.map.json
 # Node 依赖（发布页测试脚本）
 node_modules/
 package-lock.json
+
+# 发布页部署源（由 release/index.html 同步而来，不带 APK 产物）
+/release-site/
