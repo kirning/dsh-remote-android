@@ -120,6 +120,10 @@ jobs:
 
       - name: 整理产物
         id: artifact
+        env:
+          REL_VERSION: ${{ steps.version.outputs.version }}
+          REL_VERSION_CODE: ${{ steps.version.outputs.version_code }}
+          REL_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           mkdir -p dist
@@ -136,19 +140,62 @@ jobs:
             git log --pretty=format:'- %s' -n 10 > dist/notes.txt
           fi
 
+          {
+            echo "size=$SIZE"
+            echo "sha256=$SHA"
+            echo "published_at=$PUBLISHED"
+          } >> "$GITHUB_OUTPUT"
+
           # 生成 version.json（供自建服务器的静态清单方案使用）
-          python3 - <<PY
-          import json
-          notes = [l.lstrip('- ').strip() for l in open('dist/notes.txt', encoding='utf-8') if l.strip()]
+          REL_SIZE="$SIZE" REL_SHA="$SHA" REL_PUBLISHED="$PUBLISHED" \
+            python3 - <<'PY'
+          import json, os
+          version = os.environ['REL_VERSION']
+          version_code = int(os.environ['REL_VERSION_CODE'])
+          sha = os.environ['REL_SHA']
+          published = os.environ['REL_PUBLISHED']
+          size = int(os.environ['REL_SIZE'])
+          repo = os.environ['REL_REPO']
+
+          notes = [l.lstrip('- ').strip()
+                   for l in open('dist/notes.txt', encoding='utf-8') if l.strip()]
+
           data = {
-            "version": "${{ steps.version.outputs.version }}",
-            "versionCode": ${{ steps.version.outputs.version_code }},
-            "downloadUrl": "https://github.com/${{ github.repository }}/releases/latest/download/dsh-harness.apk",
-            "sha256": "$SHA",
-            "sizeBytes": $SIZE,
-            "publishedAt": "$PUBLISHED",
-            "minAndroidVersion": "7.0",
-            "notes": notes,
+              "version": version,
+              "versionCode": version_code,
+              "downloadUrl": f"https://github.com/{repo}/releases/latest/download/dsh-harness.apk",
+              "sha256": sha,
+              "sizeBytes": size,
+              "publishedAt": published,
+              "minAndroidVersion": "7.0",
+              "notes": notes,
+          }
+          json.dump(data, open('dist/version.json', 'w', encoding='utf-8'),
+                    ensure_ascii=False, indent=2)
+          PY
+
+          # 生成 version.json（供自建服务器的静态清单方案使用）
+          python3 - <<'PY'
+          import json, os
+          version = os.environ['REL_VERSION']
+          version_code = int(os.environ['REL_VERSION_CODE'])
+          sha = os.environ['REL_SHA']
+          published = os.environ['REL_PUBLISHED']
+          size = int(os.environ['REL_SIZE'])
+          repo = os.environ['REL_REPO']
+
+          notes = [l.lstrip('- ').strip()
+                   for l in open('dist/notes.txt', encoding='utf-8') if l.strip()]
+
+          data = {
+              "version": version,
+              "versionCode": version_code,
+              "downloadUrl": f"https://github.com/{repo}/releases/latest/download/dsh-harness.apk",
+              "sha256": sha,
+              "sizeBytes": size,
+              "publishedAt": published,
+              "minAndroidVersion": "7.0",
+              "notes": notes,
           }
           json.dump(data, open('dist/version.json', 'w', encoding='utf-8'),
                     ensure_ascii=False, indent=2)
@@ -173,70 +220,76 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && inputs.publish == true || startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: v${{ steps.version.outputs.version }}
-          VERSION: ${{ steps.version.outputs.version }}
-          VERSION_CODE: ${{ steps.version.outputs.version_code }}
-          SIZE: ${{ steps.artifact.outputs.size }}
-          SHA: ${{ steps.artifact.outputs.sha256 }}
-          PUBLISHED: ${{ steps.artifact.outputs.published_at }}
-          REPO: ${{ github.repository }}
+          REL_TAG: v${{ steps.version.outputs.version }}
+          REL_VERSION: ${{ steps.version.outputs.version }}
+          REL_VERSION_CODE: ${{ steps.version.outputs.version_code }}
+          REL_SIZE: ${{ steps.artifact.outputs.size }}
+          REL_SHA: ${{ steps.artifact.outputs.sha256 }}
+          REL_PUBLISHED: ${{ steps.artifact.outputs.published_at }}
+          REL_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
 
           # ---- 组装 Release body ----
           # 结构化元信息放在 HTML 注释里，供 App 解析版本号与更新日志，
           # 同时不影响正文的可读性。
-          NOTES_BLOCK=$(sed 's/^/> /' dist/notes.txt)
-
-          {
-            echo "## DSH Harness v${VERSION}"
-            echo
-            echo "- 版本号：${VERSION}"
-            echo "- 构建号：${VERSION_CODE}"
-            echo "- 文件大小：$(( SIZE / 1048576 )) MB"
-            echo "- 最低系统：Android 7.0 (API 24)"
-            echo "- 发布时间：${PUBLISHED}"
-            echo
-            echo "### 下载"
-            echo
-            echo "APK 文件名：\`dsh-harness.apk\`　sha256：\`${SHA}\`"
-            echo
-            echo "### 更新内容"
-            echo
-            echo "${NOTES_BLOCK}"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-          python3 - <<PY
+          #
+          # 注意：Python 脚本必须用 YAML 块标量（|）包裹，
+          # 否则其中的 '- 开头的行会被 YAML 当成列表项解析而报错。
+          python3 - <<'PY'
           import json, os
-          notes = [l.lstrip('- ').strip() for l in open('dist/notes.txt', encoding='utf-8') if l.strip()]
-          body = f"""## DSH Harness v${VERSION}
+          # 变量一律从环境变量读取，避免 shell 与 Python 的变量语法混用。
+          version = os.environ['REL_VERSION']
+          version_code = os.environ['REL_VERSION_CODE']
+          size = int(os.environ['REL_SIZE'])
+          sha = os.environ['REL_SHA']
+          published = os.environ['REL_PUBLISHED']
+          tag = os.environ['REL_TAG']
 
-- 版本号：${VERSION}
-- 构建号：${VERSION_CODE}
-- 文件大小：$(( SIZE / 1048576 )) MB
-- 最低系统：Android 7.0 (API 24)
+          notes = [l.lstrip('- ').strip()
+                   for l in open('dist/notes.txt', encoding='utf-8') if l.strip()]
 
-### 下载
+          # 用列表逐行拼装，避免多行字符串破坏 YAML 块标量的缩进。
+          lines = [
+              f'## DSH Harness v{version}',
+              '',
+              f'- 版本号：{version}',
+              f'- 构建号：{version_code}',
+              f'- 文件大小：{size // 1048576} MB',
+              '- 最低系统：Android 7.0 (API 24)',
+              f'- 发布时间：{published}',
+              '',
+              '### 下载',
+              '',
+              f'APK 文件名：`dsh-harness.apk`　sha256：`{sha}`',
+              '',
+              '### 更新内容',
+              '',
+          ]
+          lines += ['- ' + n for n in notes]
+          lines += [
+              '',
+              f'<!-- versionCode={version_code} -->',
+              '<!-- minAndroidVersion=7.0 -->',
+              '<!-- notes -->',
+          ]
+          lines += ['- ' + n for n in notes]
+          lines += ['<!-- /notes -->', '']
+          body = '\n'.join(lines)
 
-APK 文件名：\`dsh-harness.apk\`　sha256：\`${SHA}\`
-
-### 更新内容
-
-{chr(10).join('- ' + n for n in notes)}
-
-<!-- versionCode=${VERSION_CODE} -->
-<!-- minAndroidVersion=7.0 -->
-<!-- notes -->
-{chr(10).join('- ' + n for n in notes)}
-<!-- /notes -->
-"""
           json.dump({
-              "tag_name": "${TAG}",
-              "name": "DSH Harness v${VERSION}",
-              "body": body,
-              "draft": False,
-              "prerelease": False,
+              'tag_name': tag,
+              'name': f'DSH Harness v{version}',
+              'body': body,
+              'draft': False,
+              'prerelease': False,
           }, open('release.json', 'w', encoding='utf-8'), ensure_ascii=False)
+          PY
+
+          # 顺便把同样的内容写进 job summary，方便在 Actions 页面直接看。
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          print(json.load(open('release.json', encoding='utf-8'))['body'])
           PY
 
           # ---- 用 curl 调 API 创建 Release ----
@@ -248,7 +301,7 @@ APK 文件名：\`dsh-harness.apk\`　sha256：\`${SHA}\`
             -H "Accept: application/vnd.github+json" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
             -H "Content-Type: application/json" \
-            "https://api.github.com/repos/${REPO}/releases" \
+            "https://api.github.com/repos/${REL_REPO}/releases" \
             --data @release.json)
 
           if [ "$HTTP_CODE" != "201" ]; then
@@ -279,4 +332,4 @@ APK 文件名：\`dsh-harness.apk\`　sha256：\`${SHA}\`
           fi
 
           echo "APK 上传完成"
-          echo "Release 已发布：https://github.com/${REPO}/releases/tag/${TAG}"
+          echo "Release 已发布：https://github.com/${REL_REPO}/releases/tag/${REL_TAG}"
