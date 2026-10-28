@@ -1,0 +1,239 @@
+name: Release
+
+# 触发条件：
+#   - 推送 tag（v1.2.3）→ 发布正式 Release
+#   - 推送到 main 分支 → 只构建 APK，不发 Release（用于验证构建是否正常）
+#   - 手动触发 → 手动指定版本号发布
+on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（如 1.2.3，不带 v 前缀）'
+        required: true
+        type: string
+      publish:
+        description: '是否创建 GitHub Release'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+env:
+  FLUTTER_VERSION: '3.47.8'
+  JAVA_VERSION: '17'
+
+jobs:
+  build:
+    name: 构建 APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: 安装 Flutter ${{ env.FLUTTER_VERSION }}
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: 缓存 Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.pub-cache
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      # 签名密钥来自仓库 Secrets，本地 key.properties 不入库。
+      - name: 写入签名配置
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::error::未配置 ANDROID_KEYSTORE_BASE64 secret，将使用 debug 签名构建"
+            exit 0
+          fi
+          echo "$KEYSTORE_BASE64" | base64 --decode > android/dsh-harness-release.jks
+          cat > android/key.properties <<EOF
+          storeFile=dsh-harness-release.jks
+          storePassword=$KEYSTORE_PASSWORD
+          keyAlias=$KEY_ALIAS
+          keyPassword=$KEY_PASSWORD
+          EOF
+          echo "签名配置已写入"
+
+      - name: 确定版本号
+        id: version
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.version }}" ]; then
+            VERSION="${{ inputs.version }}"
+          elif [ "${{ github.event_name }}" = "push" ] && [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION=$(grep -E '^version:' pubspec.yaml | sed -E 's/version:[[:space:]]*//; s/\+.*//')
+          fi
+          VERSION_CODE=$(grep -E '^version:' pubspec.yaml | sed -E 's/.*\+[[:space:]]*//')
+          BUILD_NUMBER=$(( ${GITHUB_RUN_NUMBER} * 100 + ${VERSION_CODE} ))
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "version_code=$BUILD_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "构建版本 $VERSION (code $BUILD_NUMBER)"
+
+      - name: 拉取依赖
+        run: flutter pub get
+
+      - name: 运行静态检查
+        run: flutter analyze --no-fatal-infos
+
+      - name: 运行单元测试
+        run: flutter test
+
+      - name: 构建 Release APK
+        run: |
+          flutter build apk --release \
+            --build-name="${{ steps.version.outputs.version }}" \
+            --build-number="${{ steps.version.outputs.version_code }}" \
+            --dart-define=UPDATE_REPO=${{ github.repository }}
+
+      - name: 整理产物
+        id: artifact
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp build/app/outputs/flutter-apk/app-release.apk dist/dsh-harness.apk
+
+          SIZE=$(stat -c%s dist/dsh-harness.apk)
+          SHA=$(sha256sum dist/dsh-harness.apk | cut -d' ' -f1)
+          PUBLISHED=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          # 更新日志：优先用 tag 的 release notes（.github/RELEASE_NOTES.md），
+          # 没有则用本次构建的提交信息。
+          if [ -f .github/RELEASE_NOTES.md ]; then
+            cp .github/RELEASE_NOTES.md dist/notes.txt
+          else
+            git log --pretty=format:'- %s' -n 10 > dist/notes.txt
+          fi
+
+          # 把元信息写进 version.json，同时作为 Release body 的注释区块，
+          # 供 App 从 GitHub Release 里解析出版本号与更新日志。
+          python3 - <<PY
+          import json
+          notes = [l.strip('- ').strip() for l in open('dist/notes.txt', encoding='utf-8') if l.strip()]
+          data = {
+            "version": "${{ steps.version.outputs.version }}",
+            "versionCode": ${{ steps.version.outputs.version_code }},
+            "downloadUrl": "https://github.com/${{ github.repository }}/releases/latest/download/dsh-harness.apk",
+            "sha256": "$SHA",
+            "sizeBytes": $SIZE,
+            "publishedAt": "$PUBLISHED",
+            "minAndroidVersion": "7.0",
+            "notes": notes,
+          }
+          json.dump(data, open('dist/version.json', 'w', encoding='utf-8'),
+                    ensure_ascii=False, indent=2)
+          PY
+
+          {
+            echo "size=$SIZE"
+            echo "sha256=$SHA"
+            echo "published_at=$PUBLISHED"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-harness-apk
+          path: |
+            dist/dsh-harness.apk
+            dist/version.json
+          retention-days: 30
+
+      - name: 创建 GitHub Release
+        if: github.event_name == 'workflow_dispatch' && inputs.publish == true || startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: v${{ steps.version.outputs.version }}
+          VERSION: ${{ steps.version.outputs.version }}
+          VERSION_CODE: ${{ steps.version.outputs.version_code }}
+          SIZE: ${{ steps.artifact.outputs.size }}
+          SHA: ${{ steps.artifact.outputs.sha256 }}
+          PUBLISHED: ${{ steps.artifact.outputs.published_at }}
+        run: |
+          set -euo pipefail
+          NOTES_BLOCK=$(sed 's/^/          /' dist/notes.txt)
+          {
+            echo "## DSH Harness v${VERSION}"
+            echo
+            echo "- 版本号：${VERSION}"
+            echo "- 构建号：${VERSION_CODE}"
+            echo "- 文件大小：$(( SIZE / 1048576 )) MB"
+            echo "- 最低系统：Android 7.0 (API 24)"
+            echo "- 发布时间：${PUBLISHED}"
+            echo
+            echo "### 下载"
+            echo
+            echo "\`dsh-harness.apk\`（sha256: \`${SHA}\`）"
+            echo
+            echo "### 更新内容"
+            echo
+            echo "<!-- notes -->"
+            echo "${NOTES_BLOCK}"
+            echo "<!-- /notes -->"
+            echo
+            echo "<!-- versionCode=${VERSION_CODE} -->"
+            echo "<!-- minAndroidVersion=7.0 -->"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # 把结构化元信息写进 Release body，供 App 从 GitHub 解析出版本号与更新日志。
+          # 更新日志用 HTML 注释包裹，避免污染正文展示。
+          NOTES_BLOCK=$(sed 's/^/          /' dist/notes.txt)
+          BODY=$(cat <<EOF
+          ## DSH Harness v${VERSION}
+
+          - 版本号：${VERSION}
+          - 构建号：${VERSION_CODE}
+          - 文件大小：$(( SIZE / 1048576 )) MB
+          - 最低系统：Android 7.0 (API 24)
+
+          ### 下载
+
+          \`dsh-harness.apk\` — sha256: \`${SHA}\`
+
+          ### 更新内容
+
+          <!-- notes -->
+          ${NOTES_BLOCK}
+          <!-- /notes -->
+
+          <!-- versionCode=${VERSION_CODE} -->
+          <!-- minAndroidVersion=7.0 -->
+          EOF
+          )
+
+          gh release create "$TAG" \
+            --title "DSH Harness v${VERSION}" \
+            --body "$BODY" \
+            dist/dsh-harness.apk#dsh-harness.apk \
+            || gh release upload "$TAG" dist/dsh-harness.apk#dsh-harness.apk --clobber
+
+          echo "Release $TAG 已发布"

@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>DSH Harness · 下载</title>
+<meta name="description" content="DSH Harness 手机端客户端 —— 扫码或手输地址添加 dsh-harness 服务，通过内嵌 WebView 访问。">
+<style>
+  :root {
+    --bg: #f5f7fa;
+    --surface: #ffffff;
+    --border: #e3e8ef;
+    --text: #1c2430;
+    --muted: #6b7684;
+    --primary: #1f6feb;
+    --primary-dark: #1a5fd0;
+    --radius: 16px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+                 "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 0 20px 64px; }
+
+  header { padding: 56px 0 40px; text-align: center; }
+  .logo {
+    width: 88px; height: 88px; margin: 0 auto 20px;
+    border-radius: 22px;
+    background: linear-gradient(135deg, #e8effb, #d6e4fb);
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 8px 24px rgba(31, 111, 235, .12);
+  }
+  .logo svg { width: 46px; height: 46px; fill: var(--primary); }
+  h1 { margin: 0 0 8px; font-size: 32px; letter-spacing: -.5px; }
+  .tagline { margin: 0; color: var(--muted); font-size: 16px; }
+
+  .badge {
+    display: inline-block; margin-top: 16px;
+    padding: 5px 14px; border-radius: 999px;
+    background: #e8effb; color: var(--primary);
+    font-size: 13px; font-weight: 600;
+  }
+  .badge.muted { background: #eceff3; color: var(--muted); }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 24px;
+    margin-bottom: 20px;
+  }
+
+  .download {
+    display: flex; flex-wrap: wrap; align-items: center;
+    gap: 16px; justify-content: space-between;
+  }
+  .dl-info { flex: 1 1 220px; }
+  .dl-name { font-weight: 700; font-size: 17px; margin-bottom: 4px; }
+  .dl-meta { color: var(--muted); font-size: 13.5px; }
+  .dl-meta code {
+    background: #f0f3f8; padding: 1px 6px; border-radius: 5px;
+    font-size: 12.5px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 13px 28px; border-radius: 12px;
+    background: var(--primary); color: #fff;
+    font-weight: 700; font-size: 15.5px; text-decoration: none;
+    transition: background .15s, transform .1s;
+    box-shadow: 0 4px 14px rgba(31, 111, 235, .28);
+  }
+  .btn:hover { background: var(--primary-dark); }
+  .btn:active { transform: translateY(1px); }
+  .btn[aria-disabled="true"] { background: #b6c2d2; box-shadow: none; pointer-events: none; }
+  .btn svg { width: 19px; height: 19px; fill: currentColor; }
+
+  h2 {
+    margin: 0 0 14px; font-size: 18px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  h2::before {
+    content: ""; width: 4px; height: 17px;
+    background: var(--primary); border-radius: 2px;
+  }
+
+  ul.notes { margin: 0; padding-left: 20px; }
+  ul.notes li { margin-bottom: 7px; }
+  ul.notes li::marker { color: var(--primary); }
+
+  .grid {
+    display: grid; gap: 12px;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  }
+  .feature {
+    background: #fbfcfe; border: 1px solid var(--border);
+    border-radius: 12px; padding: 16px;
+  }
+  .feature .ico { font-size: 20px; margin-bottom: 6px; }
+  .feature h3 { margin: 0 0 4px; font-size: 15px; }
+  .feature p { margin: 0; color: var(--muted); font-size: 13.5px; }
+
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 8px 16px; font-size: 14px; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; font-weight: 600; word-break: break-all; }
+
+  .hash {
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: 12px; color: var(--muted);
+    background: #f0f3f8; padding: 8px 10px; border-radius: 8px;
+    word-break: break-all; line-height: 1.5;
+  }
+
+  .note {
+    background: #fff8e6; border: 1px solid #f2e2b8;
+    border-radius: 12px; padding: 14px 16px;
+    font-size: 14px; color: #6b5320;
+  }
+  .note strong { color: #4d3a12; }
+
+  .loading { color: var(--muted); font-size: 14px; }
+
+  footer {
+    text-align: center; color: var(--muted);
+    font-size: 13px; padding: 28px 0 0;
+  }
+  footer a { color: var(--primary); text-decoration: none; }
+  footer a:hover { text-decoration: underline; }
+
+  @media (max-width: 560px) {
+    header { padding: 36px 0 28px; }
+    h1 { font-size: 25px; }
+    .card { padding: 18px; }
+    .btn { width: 100%; justify-content: center; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="logo">
+      <svg viewBox="0 0 24 24"><path d="M4 4h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm0 11h16a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2Zm2 3.5v1h2v-1H6Zm0-11v1h2v-1H6Z"/></svg>
+    </div>
+    <h1>DSH Harness</h1>
+    <p class="tagline">扫码或手输地址添加 dsh-harness 服务，用手机随时访问你的工作台</p>
+    <span class="badge muted" id="versionBadge">加载中…</span>
+  </header>
+
+  <div class="card">
+    <div class="download">
+      <div class="dl-info">
+        <div class="dl-name" id="apkName">dsh-harness.apk</div>
+        <div class="dl-meta" id="apkMeta">正在从 GitHub 获取最新版本…</div>
+      </div>
+      <a class="btn" id="dlBtn" href="#" download aria-disabled="true">
+        <svg viewBox="0 0 24 24"><path d="M5 20h14v-2H5v2ZM19 9h-4V3H9v6H5l7 7 7-7Z"/></svg>
+        下载 APK
+      </a>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>功能</h2>
+    <div class="grid">
+      <div class="feature">
+        <div class="ico">📷</div>
+        <h3>扫码添加</h3>
+        <p>调用相机识别二维码，自动提取地址并回填输入框</p>
+      </div>
+      <div class="feature">
+        <div class="ico">🔗</div>
+        <h3>手输地址</h3>
+        <p>支持省略 http://，也可从带说明文字的内容中智能提取地址</p>
+      </div>
+      <div class="feature">
+        <div class="ico">🏷️</div>
+        <h3>备注管理</h3>
+        <p>为每个服务加备注，卡片标题即备注，详情页随时可改</p>
+      </div>
+      <div class="feature">
+        <div class="ico">🗂️</div>
+        <h3>卡片布局</h3>
+        <p>历史记录以卡片网格展示，按屏宽自适应一到三列</p>
+      </div>
+      <div class="feature">
+        <div class="ico">🌐</div>
+        <h3>内置浏览器</h3>
+        <p>内嵌 WebView 直接访问 dsh-harness，支持前进后退与刷新</p>
+      </div>
+      <div class="feature">
+        <div class="ico">🔄</div>
+        <h3>检查更新</h3>
+        <p>应用内一键检查新版本，有更新可直接跳转下载</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>更新日志</h2>
+    <ul class="notes" id="notes">
+      <li class="loading">正在加载…</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>安装说明</h2>
+    <div class="note">
+      <p style="margin:0 0 8px"><strong>首次安装需要允许「安装未知来源应用」</strong></p>
+      <p style="margin:0">在系统设置里为浏览器/文件管理器开启安装权限。部分机型还需要在系统设置中授予本应用「相机」权限才能使用扫码功能。</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>版本信息</h2>
+    <dl class="kv">
+      <dt>版本号</dt><dd id="kvVersion">-</dd>
+      <dt>构建号</dt><dd id="kvBuild">-</dd>
+      <dt>文件大小</dt><dd id="kvSize">-</dd>
+      <dt>系统要求</dt><dd id="kvReq">Android 7.0 (API 24) 及以上</dd>
+      <dt>发布时间</dt><dd id="kvDate">-</dd>
+    </dl>
+    <p style="margin:16px 0 8px; font-size:13px; color:var(--muted); margin-bottom:6px">SHA-256 校验值</p>
+    <div class="hash" id="hash">-</div>
+  </div>
+
+  <footer>
+    <p>DSH Harness · dsh-harness 手机客户端</p>
+    <p>源码与自动构建：<a id="repoLink" href="https://github.com/kirning/dsh-remote-android" target="_blank" rel="noopener">GitHub</a></p>
+    <p>应用内「关于与更新」页面同样可以检查新版本</p>
+  </footer>
+
+</div>
+
+<script>
+// 从 GitHub Releases 读取最新版本信息。
+// 与 App 的检查更新走同一个 API，两边看到的数据完全一致。
+(function () {
+  var REPO = 'kirning/dsh-remote-android';
+  var API = 'https://api.github.com/repos/' + REPO + '/releases/latest';
+  var APK_NAME = 'dsh-harness.apk';
+
+  function fmtSize(bytes) {
+    if (!bytes) return '-';
+    var mb = bytes / 1048576;
+    return mb >= 1 ? mb.toFixed(1) + ' MB' : (bytes / 1024).toFixed(0) + ' KB';
+  }
+
+  function fmtDate(iso) {
+    if (!iso) return '-';
+    var d = new Date(iso);
+    if (isNaN(d)) return iso;
+    var p = function (n) { return String(n).padStart(2, '0'); };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) +
+           ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+  }
+
+  function stripV(v) {
+    if (!v) return '';
+    if (v.charAt(0) === 'v' || v.charAt(0) === 'V') v = v.slice(1);
+    var plus = v.indexOf('+');
+    return plus > 0 ? v.slice(0, plus) : v;
+  }
+
+  // 从 Release body 里读结构化标记（Action 生成时写入 HTML 注释里）
+  function readMeta(body, key) {
+    var m = new RegExp(key + '\\s*[:=]\\s*"?([\\d.]+)"?').exec(body || '');
+    return m ? m[1] : null;
+  }
+
+  function readNotes(body) {
+    var m = /<!--\s*notes\s*-->([\s\S]*?)<!--\s*\/notes\s*-->/.exec(body || '');
+    var src = m ? m[1] : (body || '');
+    return src.split('\n').map(function (l) {
+      var t = l.trim();
+      if (!t) return null;
+      var mm = /^[-*•]\s+(.*)$/.exec(t);
+      return mm ? mm[1].trim() : null;
+    }).filter(Boolean);
+  }
+
+  function setText(id, text) {
+    var el = document.getElementById(id);
+    if (el) el.textContent = text;
+  }
+
+  function render(rel) {
+    var version = stripV(rel.tag_name);
+    var assets = rel.assets || [];
+    var apk = null;
+    for (var i = 0; i < assets.length; i++) {
+      if ((assets[i].name || '').toLowerCase().slice(-4) === '.apk') { apk = assets[i]; break; }
+    }
+
+    var url = apk ? apk.browser_download_url
+                   : 'https://github.com/' + REPO + '/releases/latest/download/' + APK_NAME;
+    var size = apk ? apk.size : null;
+
+    setText('versionBadge', 'v' + version);
+    setText('apkMeta', '版本 ' + version + ' · 大小 ' + fmtSize(size) + ' · GitHub Release');
+    setText('kvVersion', version);
+    setText('kvBuild', readMeta(rel.body, 'versionCode') || '-');
+    setText('kvSize', fmtSize(size));
+    setText('kvDate', fmtDate(rel.published_at));
+    setText('hash', '-');
+
+    var btn = document.getElementById('dlBtn');
+    btn.href = url;
+    btn.removeAttribute('aria-disabled');
+
+    var notes = readNotes(rel.body);
+    var ul = document.getElementById('notes');
+    ul.innerHTML = '';
+    if (!notes.length) notes = ['查看完整更新内容'];
+    notes.forEach(function (n) {
+      var li = document.createElement('li');
+      li.textContent = n;
+      ul.appendChild(li);
+    });
+  }
+
+  function fallback(err) {
+    setText('versionBadge', '暂无 Release');
+    setText('apkMeta', '未能获取版本信息（' + err + '）');
+    var btn = document.getElementById('dlBtn');
+    btn.href = 'https://github.com/' + REPO + '/releases/latest';
+    btn.removeAttribute('aria-disabled');
+    var ul = document.getElementById('notes');
+    ul.innerHTML = '';
+    var li = document.createElement('li');
+    li.textContent = '请前往 GitHub Releases 查看下载';
+    ul.appendChild(li);
+  }
+
+  fetch(API, { headers: { 'Accept': 'application/vnd.github+json' } })
+    .then(function (r) {
+      if (r.status === 404) throw new Error('还没有发布过 Release');
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    })
+    .then(render)
+    .catch(function (e) { fallback(e.message); });
+})();
+</script>
+</body>
+</html>
